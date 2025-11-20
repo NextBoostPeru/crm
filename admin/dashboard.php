@@ -262,7 +262,13 @@ $ventasPorServicio = $stmt->fetchAll();
     </div>
 
     <div class="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
-      <h2 class="text-lg font-semibold mb-2 text-gray-800">📋 Últimas tareas</h2>
+      <h2 class="text-lg font-semibold mb-2 text-gray-800 flex items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="1.5">
+          <path d="M8 7h8M8 12h8M8 17h8"/>
+          <rect x="4" y="4" width="16" height="16" rx="2" ry="2"/>
+        </svg>
+        Últimas tareas
+      </h2>
       <ul class="divide-y">
         <?php foreach ($tareasRecientes as $t): ?>
           <li class="py-2 flex items-center justify-between">
