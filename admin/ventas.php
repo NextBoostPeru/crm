@@ -1,0 +1,428 @@
+<?php
+// admin/ventas.php
+require_once '../includes/auth.php';
+require_once '../includes/db.php';
+
+$mes_actual = isset($_GET['mes']) && preg_match('/^\d{4}-\d{2}$/', $_GET['mes']) ? $_GET['mes'] : date('Y-m');
+
+// Catálogos
+$servicios = $pdo->query("SELECT id, nombre FROM servicios ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
+$estados_pago = ['pendiente', 'pagado'];
+
+// Listado de ventas por mes (vista principal)
+$stmt = $pdo->prepare("
+  SELECT v.id, v.monto, v.fecha, v.estado_pago,
+         s.nombre AS servicio,
+         c.id AS cliente_id, c.nombre AS cliente
+  FROM ventas v
+  LEFT JOIN servicios s ON s.id = v.servicio_id
+  LEFT JOIN clientes  c ON c.id = v.cliente_id
+  WHERE DATE_FORMAT(v.fecha, '%Y-%m') = ?
+  ORDER BY v.fecha DESC, v.id DESC
+");
+$stmt->execute([$mes_actual]);
+$ventas = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+function h($v){ return htmlspecialchars((string)$v, ENT_QUOTES, 'UTF-8'); }
+function fecha_corta($d){ return $d ? date('Y-m-d', strtotime($d)) : ''; }
+
+// Badge estado
+function badge_estado($estado){
+  $e = mb_strtolower(trim((string)$estado));
+  $map = [
+    'pagado'    => 'bg-green-100 text-green-800 ring-green-200',
+    'pendiente' => 'bg-amber-100 text-amber-800 ring-amber-200',
+  ];
+  $cls = $map[$e] ?? 'bg-gray-100 text-gray-800 ring-gray-200';
+  return '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset '.$cls.'">'.h($estado).'</span>';
+}
+?>
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Ventas</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+  <!-- Tailwind -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- DataTables -->
+  <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+
+  <style>
+    table.dataTable thead th { background: #e5e7eb; }
+    table.dataTable tbody tr:hover { background: #f9fafb; }
+    .dt-container .dataTables_length select,
+    .dt-container .dataTables_filter input { border: 1px solid #e5e7eb; border-radius: .5rem; padding: .25rem .5rem; }
+
+    /* Autocomplete */
+    .ac-wrap { position: relative; } 
+    .ac-list {
+      position: absolute; top: 100%; left: 0; right: 0;
+      background: #fff; border: 1px solid #e5e7eb; border-radius: .5rem;
+      margin-top: .25rem; max-height: 280px; overflow: auto; z-index: 60;
+      box-shadow: 0 8px 24px rgba(0,0,0,.08);
+    }
+    .ac-item { padding: .5rem .75rem; cursor: pointer; }
+    .ac-item:hover, .ac-item.active { background: #f3f4f6; }
+    .ac-empty { padding: .75rem; color: #6b7280; }
+  </style>
+</head>
+<body class="bg-gray-100">
+
+  <?php include '../includes/sidebar_admin.php'; ?>
+
+  <div class="p-4 lg:ml-64">
+
+    <!-- Header -->
+    <div class="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-4">
+      <h2 class="text-2xl font-bold flex items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-7 w-7" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-width="1.5" d="M3 20h18M7 16v-5M12 16V8M17 16v-3"/>
+        </svg>
+        Ventas
+      </h2>
+
+      <button onclick="abrirModal()" class="bg-blue-600 text-white px-4 py-2 rounded mt-2 sm:mt-0 inline-flex items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path stroke-width="1.5" d="M12 5v14M5 12h14"/>
+        </svg>
+        Nueva venta
+      </button>
+    </div>
+
+    <!-- Filtros -->
+    <div class="mb-4 flex flex-wrap gap-2">
+      <input type="month" id="filtroMes" class="border p-2 rounded" value="<?= h($mes_actual) ?>">
+      <button onclick="filtrarMes()" class="bg-gray-800 text-white px-4 rounded">Filtrar</button>
+    </div>
+
+    <!-- Tabla -->
+    <div class="overflow-x-auto">
+      <table id="tabla-ventas" class="min-w-full bg-white rounded shadow text-sm">
+        <thead>
+          <tr class="text-gray-700">
+            <th class="p-2 text-left">N°</th>
+            <th class="p-2 text-left">Fecha</th>
+            <th class="p-2 text-left">Cliente</th>
+            <th class="p-2 text-left">Servicio</th>
+            <th class="p-2 text-left">Monto (S/)</th>
+            <th class="p-2 text-left">Estado</th>
+            <th class="p-2 text-left">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ($ventas as $v): ?>
+            <tr class="border-b">
+              <td class="p-2"></td>
+              <td class="p-2"><?= h(fecha_corta($v['fecha'])) ?></td>
+              <td class="p-2"><?= h($v['cliente'] ?? '-') ?></td>
+              <td class="p-2"><?= h($v['servicio'] ?? '-') ?></td>
+              <td class="p-2"><?= number_format((float)$v['monto'], 2) ?></td>
+              <td class="p-2"><?= badge_estado($v['estado_pago']) ?></td>
+              <td class="p-2">
+                <div class="flex gap-2">
+                  <button class="bg-yellow-500 text-white px-2 py-1 rounded"
+                          onclick='abrirModal(<?= json_encode($v, JSON_HEX_TAG|JSON_HEX_APOS|JSON_HEX_QUOT|JSON_HEX_AMP) ?>)'>Editar</button>
+                  <button class="bg-red-600 text-white px-2 py-1 rounded"
+                          onclick='abrirModalEliminar(<?= (int)$v["id"] ?>)'>Eliminar</button>
+                </div>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    </div>
+
+  </div>
+
+  <!-- Modal Agregar/Editar -->
+  <div id="modalVenta" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-white p-6 rounded w-full max-w-xl relative">
+      <h3 class="text-xl font-bold mb-4">Agregar / Editar Venta</h3>
+ 
+      <form id="formVenta" class="grid grid-cols-2 gap-4">
+        <input type="hidden" name="id">
+        <input type="hidden" name="action" value="crear">
+
+        <!-- Cliente (Autocomplete AJAX) -->
+        <div class="col-span-2">
+          <label class="block text-sm font-medium text-gray-700 mb-1">Cliente</label>
+          <div class="ac-wrap">
+            <input type="hidden" name="cliente_id" />
+            <input type="text" id="cliente_buscar" class="border p-2 rounded w-full" placeholder="Escribe 3 letras o más..." autocomplete="off">
+            <div id="acCliente" class="ac-list hidden"></div>
+          </div>
+          <p id="cliente_help" class="text-xs text-gray-500 mt-1">Busca por nombre, empresa o email.</p>
+        </div>
+
+        <!-- Servicio -->
+        <div class="col-span-2">
+          <label class="block text-sm font-medium text-gray-700 mb-1">Servicio</label>
+          <select name="servicio_id" class="border p-2 rounded w-full" required>
+            <option value="">Seleccionar servicio</option>
+            <?php foreach ($servicios as $s): ?>
+              <option value="<?= (int)$s['id'] ?>"><?= h($s['nombre']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+
+        <!-- Monto -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Monto (S/)</label>
+          <input type="number" step="0.01" min="0" name="monto" class="border p-2 rounded w-full" required>
+        </div>
+
+        <!-- Fecha -->
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Fecha</label>
+          <input type="date" name="fecha" class="border p-2 rounded w-full" required>
+        </div>
+
+        <!-- Estado pago -->
+        <div class="col-span-2">
+          <label class="block text-sm font-medium text-gray-700 mb-1">Estado de pago</label>
+          <select name="estado_pago" class="border p-2 rounded w-full" required>
+            <?php foreach ($estados_pago as $e): ?>
+              <option value="<?= h($e) ?>"><?= ucfirst($e) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+
+        <button type="submit" class="bg-green-600 text-white py-2 rounded col-span-2">Guardar</button>
+      </form>
+
+      <button onclick="cerrarModal()" class="absolute top-2 right-2 text-gray-600 hover:text-black">&times;</button>
+    </div>
+  </div>
+
+  <!-- Modal Eliminar -->
+  <div id="modalEliminar" class="fixed inset-0 bg-black bg-opacity-50 hidden items-center justify-center z-50">
+    <div class="bg-white p-6 rounded shadow w-full max-w-md text-center relative">
+      <h3 class="text-lg font-semibold mb-4">¿Eliminar esta venta?</h3>
+      <p class="mb-4 text-gray-600">Esta acción no se puede deshacer.</p>
+      <div class="flex justify-center gap-4">
+        <button onclick="cerrarModalEliminar()" class="bg-gray-300 px-4 py-2 rounded">Cancelar</button>
+        <button id="btnConfirmarEliminar" class="bg-red-600 text-white px-4 py-2 rounded">Eliminar</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- JS -->
+  <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+  <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+  <script>
+    // DataTable con numeración
+    $(function () {
+      const table = $('#tabla-ventas').DataTable({
+        pageLength: 10,
+        order: [[1, 'desc']], // Fecha
+        language: { url: "https://cdn.datatables.net/plug-ins/1.13.6/i18n/es-ES.json" },
+        columnDefs: [
+          { targets: 0, orderable: false, searchable: false }, // N°
+          { targets: -1, orderable: false, searchable: false } // Acciones
+        ],
+        drawCallback: function(settings){
+          const api = this.api();
+          const start = api.page.info().start;
+          api.column(0, {search:'applied', order:'applied', page:'current'}).nodes().each(function(cell, i){
+            cell.innerHTML = start + i + 1;
+          });
+        }
+      });
+    });
+
+    // Filtro por mes
+    function filtrarMes(){
+      const mes = document.getElementById('filtroMes').value || '';
+      const url = new URL(window.location.href);
+      if (mes) url.searchParams.set('mes', mes); else url.searchParams.delete('mes');
+      window.location.href = url.toString();
+    }
+
+    // ---------- Modal Agregar/Editar ----------
+    function abrirModal(data = {}) {
+      const modal = document.getElementById('modalVenta');
+      const form  = document.getElementById('formVenta');
+      form.reset();
+
+      form.action.value   = data.id ? 'actualizar' : 'crear';
+      form.id.value       = data.id || '';
+
+      // Cliente (visible + hidden)
+      form.cliente_id.value = data.cliente_id || '';
+      document.getElementById('cliente_buscar').value = data.cliente || '';
+
+      form.servicio_id.value = data.servicio_id || '';
+      form.monto.value       = data.monto || '';
+      form.fecha.value       = data.fecha ? (new Date(data.fecha).toISOString().slice(0,10)) : '';
+      form.estado_pago.value = data.estado_pago || 'pendiente';
+
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+
+      form.onsubmit = async (e) => {
+        e.preventDefault();
+        const fd = new FormData(form);
+        // Validación mínima: cliente elegido
+        if (!fd.get('cliente_id')) {
+          alert('Selecciona un cliente de las sugerencias.');
+          return;
+        }
+        const res = await fetch('../controllers/ventas_controller.php', { method: 'POST', body: fd });
+        const json = await res.json();
+        if (json.success) {
+          cerrarModal();
+          location.reload();
+        } else {
+          alert(json.message || 'Error al guardar');
+        }
+      };
+    }
+    function cerrarModal(){
+      const modal = document.getElementById('modalVenta');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+
+    // ---------- Modal Eliminar ----------
+    let idEliminar = null;
+    function abrirModalEliminar(id){
+      idEliminar = id;
+      const modal = document.getElementById('modalEliminar');
+      modal.classList.remove('hidden');
+      modal.classList.add('flex');
+    }
+    function cerrarModalEliminar(){
+      idEliminar = null;
+      const modal = document.getElementById('modalEliminar');
+      modal.classList.add('hidden');
+      modal.classList.remove('flex');
+    }
+    document.getElementById('btnConfirmarEliminar').addEventListener('click', async function () {
+      if (!idEliminar) return;
+      const fd = new FormData();
+      fd.append('action', 'eliminar');
+      fd.append('id', idEliminar);
+      const res = await fetch('../controllers/ventas_controller.php', { method: 'POST', body: fd });
+      const json = await res.json();
+      if (json.success) {
+        cerrarModalEliminar();
+        location.reload();
+      } else {
+        alert(json.message || 'No se pudo eliminar.');
+      }
+    });
+
+    // ---------- Autocomplete Cliente (AJAX con debounce) ----------
+    const ac = {
+      wrap: null, list: null, input: null, hidden: null, timer: null, items: [], index: -1
+    };
+
+    document.addEventListener('DOMContentLoaded', () => {
+      ac.wrap  = document.querySelector('.ac-wrap');
+      ac.list  = document.getElementById('acCliente');
+      ac.input = document.getElementById('cliente_buscar');
+      ac.hidden= document.querySelector('input[name="cliente_id"]');
+
+      // Eventos
+      ac.input.addEventListener('input', onType);
+      ac.input.addEventListener('keydown', onKey);
+      document.addEventListener('click', (e) => {
+        if (!ac.wrap.contains(e.target)) hideList();
+      });
+    });
+
+    function onType(){
+      const q = ac.input.value.trim();
+      ac.hidden.value = ''; // limpiar id si cambian texto
+      if (ac.timer) clearTimeout(ac.timer);
+      if (q.length < 3) { hideList(); return; }
+
+      ac.timer = setTimeout(async () => {
+        try {
+          const url = '../api/clientes_buscar.php?q=' + encodeURIComponent(q);
+          const res = await fetch(url);
+          const json = await res.json();
+          if (!json || !Array.isArray(json.data)) { renderList([]); return; }
+          renderList(json.data);
+        } catch {
+          renderList([]);
+        }
+      }, 250); // debounce
+    }
+
+    function renderList(items){
+      ac.items = items;
+      ac.index = -1;
+      if (!items.length) {
+        ac.list.innerHTML = '<div class="ac-empty">Sin resultados…</div>';
+        ac.list.classList.remove('hidden');
+        return;
+      }
+      ac.list.innerHTML = items.map((it, i) => {
+        const linea = [
+          it.nombre || '',
+          it.empresa ? ` · ${it.empresa}` : '',
+          it.email ? ` · ${it.email}` : ''
+        ].join('');
+        return `<div class="ac-item" data-i="${i}">${linea}</div>`;
+      }).join('');
+      ac.list.classList.remove('hidden');
+
+      // Click selección
+      ac.list.querySelectorAll('.ac-item').forEach(el => {
+        el.addEventListener('click', () => {
+          const i = parseInt(el.getAttribute('data-i'));
+          choose(i);
+        });
+      });
+    }
+
+    function onKey(e){
+      if (ac.list.classList.contains('hidden')) return;
+      const max = ac.items.length - 1;
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        ac.index = Math.min(max, ac.index + 1);
+        highlight();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        ac.index = Math.max(0, ac.index - 1);
+        highlight();
+      } else if (e.key === 'Enter') {
+        if (ac.index >= 0) {
+          e.preventDefault();
+          choose(ac.index);
+        }
+      } else if (e.key === 'Escape') {
+        hideList();
+      }
+    }
+
+    function highlight(){
+      ac.list.querySelectorAll('.ac-item').forEach((el, i) => {
+        el.classList.toggle('active', i === ac.index);
+        if (i === ac.index) el.scrollIntoView({ block: 'nearest' });
+      });
+    }
+
+    function choose(i){
+      const it = ac.items[i];
+      if (!it) return;
+      ac.hidden.value = it.id;
+      ac.input.value  = it.nombre + (it.empresa ? ' · ' + it.empresa : '');
+      hideList();
+    }
+
+    function hideList(){
+      ac.list.classList.add('hidden');
+      ac.list.innerHTML = '';
+      ac.items = [];
+      ac.index = -1;
+    }
+  </script>
+</body>
+</html>
