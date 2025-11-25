@@ -2,10 +2,15 @@
 session_start();
 require_once 'includes/db.php';
 
-$email = trim($_POST['email'] ?? '');
+$email = strtolower(trim($_POST['email'] ?? ''));
 $password = $_POST['password'] ?? '';
 
-$stmt = $pdo->prepare("SELECT * FROM usuarios WHERE email = ? LIMIT 1");
+if ($email === '' || $password === '') {
+    header("Location: login.php?error=1");
+    exit;
+}
+
+$stmt = $pdo->prepare("SELECT * FROM usuarios WHERE LOWER(email) = ? LIMIT 1");
 $stmt->execute([$email]);
 $usuario = $stmt->fetch(PDO::FETCH_ASSOC);
 
