@@ -31,23 +31,20 @@ $stmt = $pdo->prepare("SELECT * FROM usuarios WHERE LOWER(email) COLLATE utf8mb4
 $stmt->execute([$email]);
 $usuario = $stmt->fetch(PDO::FETCH_ASSOC);
 
+/**
+ * Verifica la contraseña del usuario contemplando hash modernos y heredados.
+ */
 $passwordValido = false;
 
-if ($usuario) {
-    // Soporta contraseñas en texto plano, password_hash y legacy md5/sha1
-    if (!empty($usuario['password'])) {
-        $hashGuardado = (string) $usuario['password'];
+if ($usuario && !empty($usuario['password'])) {
+    $hashGuardado = trim((string) $usuario['password']);
 
-        if (password_verify($password, $hashGuardado)) {
-            $passwordValido = true;
-        } elseif (hash_equals($hashGuardado, $password)) {
-            $passwordValido = true;
-        } elseif (hash_equals($hashGuardado, md5($password))) {
-            $passwordValido = true;
-        } elseif (hash_equals($hashGuardado, sha1($password))) {
-            $passwordValido = true;
-        }
-    }
+    $passwordValido = password_verify($password, $hashGuardado)
+        || hash_equals($hashGuardado, $password)
+        || hash_equals($hashGuardado, md5($password))
+        || hash_equals($hashGuardado, sha1($password))
+        || hash_equals($hashGuardado, hash('sha256', $password))
+        || hash_equals($hashGuardado, hash('sha512', $password));
 }
 
 if ($usuario && $passwordValido) {
