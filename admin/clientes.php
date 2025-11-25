@@ -44,23 +44,37 @@ $estados   = ['en negociación', 'cerrado', 'interesado', 'nuevo'];
   'servicio' => $filtro_servicio,
   'busqueda' => $filtro_busqueda,
 ]);
-$sql_list = "SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.comentario, c.creado_en,
-                    c.servicio_id, s.nombre AS servicio
-             FROM clientes c
-             LEFT JOIN servicios s ON s.id = c.servicio_id
-             WHERE ".implode(' AND ', $where_list)."
-             ORDER BY c.creado_en DESC, c.id DESC
-             LIMIT {$limite_listado}";
-$stmt = $pdo->prepare($sql_list);
-$stmt->execute($params_list);
-$clientes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+$errores_consulta = [];
+
+try {
+  $sql_list = "SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.comentario, c.creado_en,
+                      c.servicio_id, s.nombre AS servicio
+               FROM clientes c
+               LEFT JOIN servicios s ON s.id = c.servicio_id
+               WHERE ".implode(' AND ', $where_list)."
+               ORDER BY c.creado_en DESC, c.id DESC
+               LIMIT {$limite_listado}";
+  $stmt = $pdo->prepare($sql_list);
+  $stmt->execute($params_list);
+  $clientes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+  $clientes = [];
+  $errores_consulta[] = 'No se pudo cargar el listado de clientes. Verifica la tabla clientes: '.$e->getMessage();
+}
 
 // Conteo total para avisar si se recorta la lista
-$sql_total = "SELECT COUNT(*) FROM clientes c LEFT JOIN servicios s ON s.id = c.servicio_id WHERE ".implode(' AND ', $where_list);
-$stmt_total = $pdo->prepare($sql_total);
-$stmt_total->execute($params_list);
-$total_clientes_filtrados = (int)$stmt_total->fetchColumn();
-$listado_recortado = $total_clientes_filtrados > $limite_listado;
+try {
+  $sql_total = "SELECT COUNT(*) FROM clientes c LEFT JOIN servicios s ON s.id = c.servicio_id WHERE ".implode(' AND ', $where_list);
+  $stmt_total = $pdo->prepare($sql_total);
+  $stmt_total->execute($params_list);
+  $total_clientes_filtrados = (int)$stmt_total->fetchColumn();
+  $listado_recortado = $total_clientes_filtrados > $limite_listado;
+} catch (Throwable $e) {
+  $total_clientes_filtrados = 0;
+  $listado_recortado = false;
+  $errores_consulta[] = 'No se pudo calcular el total de clientes: '.$e->getMessage();
+}
 
 // Seguimiento general (sin limitar por mes)
 [$where_pipeline, $params_pipeline] = condiciones_clientes([
@@ -69,29 +83,40 @@ $listado_recortado = $total_clientes_filtrados > $limite_listado;
   'servicio' => $filtro_servicio,
   'busqueda' => $filtro_busqueda,
 ]);
-$sql_pipeline = "
-  SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.servicio_id,
-         s.nombre AS servicio,
-         (SELECT MAX(fecha) FROM seguimientos WHERE cliente_id = c.id) AS ultima_interaccion,
-         (SELECT nota FROM seguimientos WHERE cliente_id = c.id ORDER BY fecha DESC, id DESC LIMIT 1) AS ultima_nota
-  FROM clientes c
-  LEFT JOIN servicios s ON s.id = c.servicio_id
-  WHERE ".implode(' AND ', $where_pipeline)."
-  ORDER BY ultima_interaccion DESC IS NULL, ultima_interaccion DESC, c.nombre
-  LIMIT 120
-";
-$clientes_pipeline_stmt = $pdo->prepare($sql_pipeline);
-$clientes_pipeline_stmt->execute($params_pipeline);
-$clientes_pipeline = $clientes_pipeline_stmt->fetchAll(PDO::FETCH_ASSOC);
 
-$seg_stmt = $pdo->query("
-  SELECT s.id, s.fecha, s.nota, c.nombre AS cliente, c.estado
-  FROM seguimientos s
-  LEFT JOIN clientes c ON c.id = s.cliente_id
-  ORDER BY s.fecha DESC, s.id DESC
-  LIMIT 12
-");
-$seguimientos = $seg_stmt->fetchAll(PDO::FETCH_ASSOC);
+try {
+  $sql_pipeline = "
+    SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.servicio_id,
+           s.nombre AS servicio,
+           (SELECT MAX(fecha) FROM seguimientos WHERE cliente_id = c.id) AS ultima_interaccion,
+           (SELECT nota FROM seguimientos WHERE cliente_id = c.id ORDER BY fecha DESC, id DESC LIMIT 1) AS ultima_nota
+    FROM clientes c
+    LEFT JOIN servicios s ON s.id = c.servicio_id
+    WHERE ".implode(' AND ', $where_pipeline)."
+    ORDER BY ultima_interaccion DESC IS NULL, ultima_interaccion DESC, c.nombre
+    LIMIT 120
+  ";
+  $clientes_pipeline_stmt = $pdo->prepare($sql_pipeline);
+  $clientes_pipeline_stmt->execute($params_pipeline);
+  $clientes_pipeline = $clientes_pipeline_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+  $clientes_pipeline = [];
+  $errores_consulta[] = 'No se pudo cargar el pipeline de clientes. Confirma las tablas clientes/seguimientos: '.$e->getMessage();
+}
+
+try {
+  $seg_stmt = $pdo->query("
+    SELECT s.id, s.fecha, s.nota, c.nombre AS cliente, c.estado
+    FROM seguimientos s
+    LEFT JOIN clientes c ON c.id = s.cliente_id
+    ORDER BY s.fecha DESC, s.id DESC
+    LIMIT 12
+  ");
+  $seguimientos = $seg_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+  $seguimientos = [];
+  $errores_consulta[] = 'No se pudieron cargar los seguimientos recientes: '.$e->getMessage();
+}
 
 // Resúmenes rápidos para la cabecera
 $total_clientes = count($clientes);
@@ -203,11 +228,11 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
           </h2>
           <p class="text-sm text-gray-600 mt-1">Seguimiento mensual de interesados, negociaciones y cierres.</p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-          <button onclick="abrirModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg inline-flex items-center gap-2 hover:bg-blue-700 transition">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-width="1.5" d="M12 5v14M5 12h14" />
-            </svg>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="abrirModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg inline-flex items-center gap-2 hover:bg-blue-700 transition">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-width="1.5" d="M12 5v14M5 12h14" />
+          </svg>
             Nuevo cliente
           </button>
           <button onclick="filtrarMes()" class="bg-slate-900 text-white px-4 py-2 rounded-lg inline-flex items-center gap-2 hover:bg-slate-800 transition">
@@ -218,6 +243,14 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
           </button>
         </div>
       </div>
+
+      <?php if (!empty($errores_consulta)): ?>
+        <div class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800 space-y-1">
+          <?php foreach ($errores_consulta as $err): ?>
+            <p>⚠️ <?= h($err) ?></p>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         <div class="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
