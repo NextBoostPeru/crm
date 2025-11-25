@@ -9,6 +9,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $fecha = $_POST['fecha'] ?? null;
     $estado_pago = $_POST['estado_pago'] ?? null;
 
+    $action = $_POST['action'] ?? 'crear';
+
+    if ($action === 'eliminar') {
+        $id = isset($_POST['id']) ? (int) $_POST['id'] : 0;
+        if ($id <= 0) {
+            echo json_encode(['success' => false, 'message' => 'ID inválido']);
+            exit;
+        }
+        $stmt = $pdo->prepare("DELETE FROM ventas WHERE id = ?");
+        $ok = $stmt->execute([$id]);
+        echo json_encode(['success' => $ok, 'message' => $ok ? 'Venta eliminada' : 'No se pudo eliminar']);
+        exit;
+    }
+
     if (!$cliente_id || !$servicio_id || !$monto || !$fecha || !$estado_pago) {
         echo json_encode(['success' => false, 'message' => 'Datos incompletos']);
         exit;
