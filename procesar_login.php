@@ -6,7 +6,7 @@ $email = strtolower(trim($_POST['email'] ?? ''));
 $password = trim($_POST['password'] ?? '');
 
 if ($email === '' || $password === '') {
-    header("Location: /index.php?error=1", true, 303);
+    header("Location: index.php?error=1", true, 303);
     exit;
 }
 
@@ -40,12 +40,12 @@ if ($usuario && $passwordValido) {
     $_SESSION['usuario_id'] = $usuario['id'];
 
     if ($usuario['rol'] === 'admin') {
-        header("Location: /admin/dashboard.php", true, 303);
+        header("Location: admin/dashboard.php", true, 303);
     } else {
-        header("Location: /colaborador/dashboard.php", true, 303);
+        header("Location: colaborador/dashboard.php", true, 303);
     }
     exit;
 }
 
-header("Location: /index.php?error=1", true, 303);
+header("Location: index.php?error=1", true, 303);
 exit;
