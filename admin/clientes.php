@@ -4,20 +4,119 @@ require_once '../includes/auth.php';
 require_once '../includes/db.php';
 
 $mes_actual = isset($_GET['mes']) && preg_match('/^\d{4}-\d{2}$/', $_GET['mes']) ? $_GET['mes'] : date('Y-m');
+$filtro_estado = isset($_GET['estado']) ? trim($_GET['estado']) : '';
+$filtro_servicio = isset($_GET['servicio']) ? trim($_GET['servicio']) : '';
+$filtro_busqueda = isset($_GET['q']) ? trim($_GET['q']) : '';
+
+$limite_listado = 150; // evita listas kilométricas
+
+// Helper para reutilizar filtros en consultas
+function condiciones_clientes(array $opts): array {
+  $where = ["DATE_FORMAT(c.creado_en, '%Y-%m') = :mes"];
+  $params = [':mes' => $opts['mes']];
+
+  if ($opts['estado'] !== '') {
+    $where[] = 'LOWER(c.estado) = LOWER(:estado)';
+    $params[':estado'] = $opts['estado'];
+  }
+
+  if ($opts['servicio'] !== '') {
+    $where[] = 'c.servicio_id = :servicio_id';
+    $params[':servicio_id'] = (int)$opts['servicio'];
+  }
+
+  if ($opts['busqueda'] !== '') {
+    $where[] = '(c.nombre LIKE :q OR c.empresa LIKE :q OR c.email LIKE :q)';
+    $params[':q'] = '%'.$opts['busqueda'].'%';
+  }
+
+  return [$where, $params];
+}
 
 // Catálogo
 $servicios = $pdo->query("SELECT id, nombre FROM servicios ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
 $estados   = ['en negociación', 'cerrado', 'interesado', 'nuevo'];
 
-// Listado (por mes, como ventas.php)
-$stmt = $pdo->prepare("SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.comentario, c.creado_en,
-                              c.servicio_id, s.nombre AS servicio
-                       FROM clientes c
-                       LEFT JOIN servicios s ON s.id = c.servicio_id
-                       WHERE DATE_FORMAT(c.creado_en, '%Y-%m') = ?
-                       ORDER BY c.creado_en DESC, c.id DESC");
-$stmt->execute([$mes_actual]);
-$clientes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+// Listado (por mes, como ventas.php) con filtros y límite
+[$where_list, $params_list] = condiciones_clientes([
+  'mes' => $mes_actual,
+  'estado' => $filtro_estado,
+  'servicio' => $filtro_servicio,
+  'busqueda' => $filtro_busqueda,
+]);
+
+$errores_consulta = [];
+
+try {
+  $sql_list = "SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.comentario, c.creado_en,
+                      c.servicio_id, s.nombre AS servicio
+               FROM clientes c
+               LEFT JOIN servicios s ON s.id = c.servicio_id
+               WHERE ".implode(' AND ', $where_list)."
+               ORDER BY c.creado_en DESC, c.id DESC
+               LIMIT {$limite_listado}";
+  $stmt = $pdo->prepare($sql_list);
+  $stmt->execute($params_list);
+  $clientes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+  $clientes = [];
+  $errores_consulta[] = 'No se pudo cargar el listado de clientes. Verifica la tabla clientes: '.$e->getMessage();
+}
+
+// Conteo total para avisar si se recorta la lista
+try {
+  $sql_total = "SELECT COUNT(*) FROM clientes c LEFT JOIN servicios s ON s.id = c.servicio_id WHERE ".implode(' AND ', $where_list);
+  $stmt_total = $pdo->prepare($sql_total);
+  $stmt_total->execute($params_list);
+  $total_clientes_filtrados = (int)$stmt_total->fetchColumn();
+  $listado_recortado = $total_clientes_filtrados > $limite_listado;
+} catch (Throwable $e) {
+  $total_clientes_filtrados = 0;
+  $listado_recortado = false;
+  $errores_consulta[] = 'No se pudo calcular el total de clientes: '.$e->getMessage();
+}
+
+// Seguimiento general (sin limitar por mes)
+[$where_pipeline, $params_pipeline] = condiciones_clientes([
+  'mes' => $mes_actual,
+  'estado' => $filtro_estado,
+  'servicio' => $filtro_servicio,
+  'busqueda' => $filtro_busqueda,
+]);
+
+try {
+  $sql_pipeline = "
+    SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.servicio_id,
+           s.nombre AS servicio,
+           (SELECT MAX(fecha) FROM seguimientos WHERE cliente_id = c.id) AS ultima_interaccion,
+           (SELECT nota FROM seguimientos WHERE cliente_id = c.id ORDER BY fecha DESC, id DESC LIMIT 1) AS ultima_nota
+    FROM clientes c
+    LEFT JOIN servicios s ON s.id = c.servicio_id
+    WHERE ".implode(' AND ', $where_pipeline)."
+    ORDER BY ultima_interaccion DESC IS NULL, ultima_interaccion DESC, c.nombre
+    LIMIT 120
+  ";
+  $clientes_pipeline_stmt = $pdo->prepare($sql_pipeline);
+  $clientes_pipeline_stmt->execute($params_pipeline);
+  $clientes_pipeline = $clientes_pipeline_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+  $clientes_pipeline = [];
+  $errores_consulta[] = 'No se pudo cargar el pipeline de clientes. Confirma las tablas clientes/seguimientos: '.$e->getMessage();
+}
+
+try {
+  $seg_stmt = $pdo->query("
+    SELECT s.id, s.fecha, s.nota, c.nombre AS cliente, c.estado
+    FROM seguimientos s
+    LEFT JOIN clientes c ON c.id = s.cliente_id
+    ORDER BY s.fecha DESC, s.id DESC
+    LIMIT 12
+  ");
+  $seguimientos = $seg_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (Throwable $e) {
+  $seguimientos = [];
+  $errores_consulta[] = 'No se pudieron cargar los seguimientos recientes: '.$e->getMessage();
+}
 
 // Resúmenes rápidos para la cabecera
 $total_clientes = count($clientes);
@@ -57,6 +156,36 @@ function badge_estado($estado){
   $cls = $map[$estado_lc] ?? 'bg-gray-100 text-gray-800 ring-gray-200';
   return '<span class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset '.$cls.'">'.h($estado).'</span>';
 }
+function etapa_label($estado){
+  $e = strtolower((string)$estado);
+  if (in_array($e, ['lead','nuevo','contacto inicial'])) return 'Lead';
+  if (in_array($e, ['prospecto','prospecting','seguimiento'])) return 'Prospecto';
+  if (in_array($e, ['cliente','activo','cerrado'])) return 'Cliente';
+  if (in_array($e, ['fidelizado','fidelizacion','fidelización'])) return 'Fidelización';
+  return 'Prospecto';
+}
+function proximo_recordatorio($ultima){
+  if (!$ultima) return date('Y-m-d', strtotime('+2 days'));
+  return date('Y-m-d', strtotime($ultima.' +5 days'));
+}
+
+$etapas = ['Lead','Prospecto','Cliente','Fidelización'];
+$pipeline_cols = array_fill_keys($etapas, []);
+foreach ($clientes_pipeline as $cli) {
+  $etapa = etapa_label($cli['estado']);
+  $cli['proximo'] = proximo_recordatorio($cli['ultima_interaccion']);
+  $pipeline_cols[$etapa][] = $cli;
+}
+$recordatorios = [];
+foreach ($clientes_pipeline as $cli) {
+  $recordatorios[] = [
+    'cliente' => $cli['nombre'],
+    'estado' => etapa_label($cli['estado']),
+    'proximo' => proximo_recordatorio($cli['ultima_interaccion']),
+    'ultima'  => $cli['ultima_interaccion']
+  ];
+}
+usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -78,6 +207,8 @@ function badge_estado($estado){
     .modal-overlay { background: linear-gradient(135deg, rgba(15,23,42,.55), rgba(15,23,42,.45)); }
     .field-label { font-size: .875rem; font-weight: 600; color: #1f2937; }
     .animate-fade-in { animation: fadeIn 0.3s ease; }
+    .kanban-col { min-width: 260px; }
+    .kanban-card { border: 1px solid #e5e7eb; }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(4px);} to { opacity: 1; transform: translateY(0);} }
   </style>
 </head>
@@ -97,11 +228,11 @@ function badge_estado($estado){
           </h2>
           <p class="text-sm text-gray-600 mt-1">Seguimiento mensual de interesados, negociaciones y cierres.</p>
         </div>
-        <div class="flex gap-2 flex-wrap">
-          <button onclick="abrirModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg inline-flex items-center gap-2 hover:bg-blue-700 transition">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
-              <path stroke-width="1.5" d="M12 5v14M5 12h14" />
-            </svg>
+      <div class="flex gap-2 flex-wrap">
+        <button onclick="abrirModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg inline-flex items-center gap-2 hover:bg-blue-700 transition">
+          <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+            <path stroke-width="1.5" d="M12 5v14M5 12h14" />
+          </svg>
             Nuevo cliente
           </button>
           <button onclick="filtrarMes()" class="bg-slate-900 text-white px-4 py-2 rounded-lg inline-flex items-center gap-2 hover:bg-slate-800 transition">
@@ -112,6 +243,14 @@ function badge_estado($estado){
           </button>
         </div>
       </div>
+
+      <?php if (!empty($errores_consulta)): ?>
+        <div class="rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-800 space-y-1">
+          <?php foreach ($errores_consulta as $err): ?>
+            <p>⚠️ <?= h($err) ?></p>
+          <?php endforeach; ?>
+        </div>
+      <?php endif; ?>
 
       <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
         <div class="rounded-xl border border-blue-100 bg-blue-50 px-4 py-3">
@@ -138,7 +277,7 @@ function badge_estado($estado){
         </div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
         <label class="flex flex-col gap-1">
           <span class="text-sm font-semibold text-gray-700">Mes</span>
           <input type="month" id="filtroMes" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200" value="<?= h($mes_actual) ?>">
@@ -148,7 +287,7 @@ function badge_estado($estado){
           <select id="filtroEstado" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200">
             <option value="">Todos</option>
             <?php foreach ($estados as $estado): ?>
-              <option value="<?= h($estado) ?>"><?= ucfirst($estado) ?></option>
+              <option value="<?= h($estado) ?>" <?= $filtro_estado === $estado ? 'selected' : '' ?>><?= ucfirst($estado) ?></option>
             <?php endforeach; ?>
           </select>
         </label>
@@ -157,10 +296,29 @@ function badge_estado($estado){
           <select id="filtroServicio" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200">
             <option value="">Todos</option>
             <?php foreach ($servicios as $s): ?>
-              <option value="<?= h($s['nombre']) ?>"><?= h($s['nombre']) ?></option>
+              <option value="<?= (int)$s['id'] ?>" <?= (string)$filtro_servicio === (string)$s['id'] ? 'selected' : '' ?>><?= h($s['nombre']) ?></option>
             <?php endforeach; ?>
           </select>
         </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-sm font-semibold text-gray-700">Buscar</span>
+          <input type="search" id="filtroBusqueda" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200" placeholder="Nombre, empresa o email" value="<?= h($filtro_busqueda) ?>">
+        </label>
+      </div>
+
+      <div class="flex items-center flex-wrap gap-2 text-xs text-gray-600">
+        <span class="px-2 py-1 bg-slate-100 rounded-full border border-slate-200">
+          <?= $total_clientes_filtrados ?> coincidencias
+          <?= $listado_recortado ? "· mostrando {$limite_listado}" : '' ?>
+        </span>
+        <?php if ($listado_recortado): ?>
+          <span class="text-amber-600 flex items-center gap-1 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-width="1.5" d="M12 9v3m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Demasiados resultados. Ajusta los filtros o la búsqueda para acotar la lista.
+          </span>
+        <?php endif; ?>
       </div>
 
       <div class="flex flex-wrap gap-2 text-xs text-gray-500">
@@ -176,6 +334,154 @@ function badge_estado($estado){
         <?php if (!$topServ): ?>
           <span class="text-gray-500">Sin servicios registrados este mes.</span>
         <?php endif; ?>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <div class="lg:col-span-2 bg-white rounded-2xl card-shadow border border-gray-100 p-4">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-semibold flex items-center gap-2 text-slate-900">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="1.5" d="M4 6h16M6 12h12M10 18h4"/></svg>
+            Pipeline de clientes
+          </h3>
+          <span class="text-xs text-gray-500">Lead → Prospecto → Cliente</span>
+        </div>
+        <div class="overflow-x-auto pb-2">
+          <div class="flex gap-3 min-w-full">
+            <?php foreach ($etapas as $etapa): ?>
+              <div class="kanban-col bg-gray-50 rounded-xl p-3 shadow-inner flex-1">
+                <div class="flex items-center justify-between mb-2">
+                  <p class="font-semibold text-gray-700 flex items-center gap-2">
+                    <span class="inline-block w-2 h-2 rounded-full bg-indigo-500"></span> <?= h($etapa) ?>
+                  </p>
+                  <span class="text-xs text-gray-500 px-2 py-1 bg-white rounded-full border"><?= count($pipeline_cols[$etapa]) ?> en curso</span>
+                </div>
+                <div class="space-y-2">
+                  <?php if (!count($pipeline_cols[$etapa])): ?>
+                    <p class="text-sm text-gray-500 bg-white border rounded-lg p-3">Sin contactos en esta etapa.</p>
+                  <?php endif; ?>
+                  <?php foreach ($pipeline_cols[$etapa] as $c): ?>
+                    <article class="kanban-card bg-white rounded-lg p-3 shadow-sm">
+                      <div class="flex items-center justify-between gap-3">
+                        <div>
+                          <p class="font-semibold text-gray-800 leading-tight"><?= h($c['nombre']) ?></p>
+                          <p class="text-xs text-gray-500"><?= h($c['empresa'] ?: 'Sin empresa') ?></p>
+                        </div>
+                        <span class="text-xs px-2 py-1 rounded-full bg-indigo-50 text-indigo-700 border border-indigo-100"><?= h($c['servicio'] ?: 'Servicio') ?></span>
+                      </div>
+                      <div class="mt-2 flex items-center gap-2 text-xs text-gray-600">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="1.5" d="M8 10h8M8 14h5m-9 4h12a2 2 0 0 0 2-2V8l-4-4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2Z"/></svg>
+                        Última nota: <?= h($c['ultima_nota'] ?: 'Pendiente de contacto') ?>
+                      </div>
+                      <div class="mt-2 flex items-center justify-between text-xs text-gray-600">
+                        <span class="flex items-center gap-1">
+                          <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="1.5" d="M3 8.5 12 4l9 4.5-9 4.5-9-4.5Zm0 5L12 18l9-4.5"/></svg>
+                          Próximo: <?= h($c['proximo']) ?>
+                        </span>
+                        <span class="text-emerald-600 font-medium"><?= h(etapa_label($c['estado'])) ?></span>
+                      </div>
+                    </article>
+                  <?php endforeach; ?>
+                </div>
+              </div>
+            <?php endforeach; ?>
+          </div>
+        </div>
+      </div>
+
+      <div class="bg-white rounded-2xl card-shadow border border-gray-100 p-4 space-y-3">
+        <div class="flex items-center justify-between">
+          <h4 class="font-semibold text-gray-800">Recordatorios</h4>
+          <span class="text-xs text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">Automático</span>
+        </div>
+        <div class="space-y-2">
+          <?php foreach (array_slice($recordatorios, 0, 6) as $r): ?>
+            <div class="border rounded-lg p-3 flex items-start justify-between gap-2">
+              <div>
+                <p class="font-semibold text-gray-800"><?= h($r['cliente']) ?></p>
+                <p class="text-xs text-gray-500">Etapa: <?= h($r['estado']) ?> · Último: <?= h(fecha_corta($r['ultima'])) ?: 'N/D' ?></p>
+              </div>
+              <span class="text-xs px-2 py-1 rounded-full <?= $r['proximo'] <= date('Y-m-d') ? 'bg-amber-100 text-amber-700' : 'bg-indigo-50 text-indigo-700' ?>">Seguimiento <?= h($r['proximo']) ?></span>
+            </div>
+          <?php endforeach; ?>
+          <?php if (!count($recordatorios)): ?>
+            <p class="text-sm text-gray-500">Aún no hay recordatorios generados.</p>
+          <?php endif; ?>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
+      <div class="bg-white rounded-2xl card-shadow border border-gray-100 p-5 lg:col-span-2">
+        <div class="flex items-center justify-between mb-3">
+          <h3 class="text-lg font-semibold flex items-center gap-2 text-slate-900">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="1.5" d="M5 13a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v4H5Z"/><path stroke-width="1.5" d="M9 9V7a3 3 0 1 1 6 0v2"/></svg>
+            Registrar seguimiento
+          </h3>
+          <span class="text-xs text-gray-500">Última interacción + próximo paso</span>
+        </div>
+        <form id="formSeguimiento" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div class="md:col-span-2">
+            <label class="text-sm font-medium text-gray-700">Cliente</label>
+            <select name="cliente_id" class="mt-1 w-full border rounded-lg p-2" required>
+              <option value="">Selecciona un contacto</option>
+              <?php foreach ($clientes_pipeline as $c): ?>
+                <option value="<?= (int)$c['id'] ?>"><?= h($c['nombre']) ?> — <?= h(etapa_label($c['estado'])) ?></option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+          <div>
+            <label class="text-sm font-medium text-gray-700">Fecha de contacto</label>
+            <input type="date" name="fecha" class="mt-1 w-full border rounded-lg p-2" value="<?= date('Y-m-d') ?>" required>
+          </div>
+          <div>
+            <label class="text-sm font-medium text-gray-700">Tipo</label>
+            <select name="tipo" class="mt-1 w-full border rounded-lg p-2" required>
+              <option value="llamada">Llamada</option>
+              <option value="mensaje">Mensaje</option>
+              <option value="reunión">Reunión</option>
+            </select>
+          </div>
+          <div class="md:col-span-2">
+            <label class="text-sm font-medium text-gray-700">Detalle</label>
+            <textarea name="nota" class="mt-1 w-full border rounded-lg p-2" rows="2" placeholder="Objetivo, acuerdos, próximas acciones" required></textarea>
+          </div>
+          <div>
+            <label class="text-sm font-medium text-gray-700">Próximo seguimiento</label>
+            <input type="date" name="proximo" class="mt-1 w-full border rounded-lg p-2" value="<?= date('Y-m-d', strtotime('+5 days')) ?>">
+          </div>
+          <div class="md:col-span-2 flex items-center gap-3">
+            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg">Guardar seguimiento</button>
+            <p id="seguimientoMsg" class="text-sm text-gray-500"></p>
+          </div>
+        </form>
+      </div>
+
+      <div class="bg-white rounded-2xl card-shadow border border-gray-100 p-5 space-y-3">
+        <div class="flex items-center justify-between">
+          <h4 class="font-semibold text-gray-800">Seguimientos recientes</h4>
+          <span class="text-xs text-gray-500">Últimos 12 registros</span>
+        </div>
+        <div class="space-y-3">
+          <?php if (!count($seguimientos)): ?>
+            <p class="text-sm text-gray-500">Aún no hay seguimientos registrados.</p>
+          <?php endif; ?>
+          <?php foreach ($seguimientos as $s): ?>
+            <div class="flex items-start gap-3 border rounded-xl p-3">
+              <div class="mt-1 bg-blue-100 text-blue-700 w-8 h-8 rounded-full flex items-center justify-center font-semibold">
+                <?= strtoupper(substr($s['cliente'] ?: 'C',0,1)) ?>
+              </div>
+              <div class="flex-1">
+                <div class="flex items-center justify-between gap-2">
+                  <p class="font-semibold text-gray-800"><?= h($s['cliente'] ?: 'Cliente') ?></p>
+                  <span class="text-xs bg-gray-100 px-2 py-1 rounded-full border"><?= h(fecha_corta($s['fecha'])) ?></span>
+                </div>
+                <p class="text-sm text-gray-700 leading-snug mt-1"><?= h($s['nota']) ?></p>
+                <p class="text-xs text-gray-500 mt-1">Etapa: <?= h(etapa_label($s['estado'])) ?></p>
+              </div>
+            </div>
+          <?php endforeach; ?>
+        </div>
       </div>
     </div>
 
@@ -196,7 +502,7 @@ function badge_estado($estado){
         </thead>
         <tbody>
           <?php foreach ($clientes as $c): ?>
-            <tr class="border-b" data-estado="<?= h($c['estado']) ?>" data-servicio="<?= h($c['servicio'] ?? '') ?>">
+            <tr class="border-b" data-estado="<?= h($c['estado']) ?>" data-servicio="<?= h($c['servicio'] ?? '') ?>" data-servicio-id="<?= (int)($c['servicio_id'] ?? 0) ?>">
               <!-- N° (se llena por DataTables) -->
               <td class="p-2"></td>
 
@@ -407,16 +713,16 @@ function badge_estado($estado){
         }
       });
 
-      // Filtro por estado y servicio
+      // Filtro por estado y servicio (cliente-side sobre el resultado ya acotado en el servidor)
       $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
         if (settings.nTable.id !== 'tabla-clientes') return true;
         const estadoFiltro = (document.getElementById('filtroEstado').value || '').toLowerCase();
-        const servicioFiltro = (document.getElementById('filtroServicio').value || '').toLowerCase();
+        const servicioFiltro = (document.getElementById('filtroServicio').value || '').toString();
         const rowNode = tablaClientes.row(dataIndex).node();
         const estadoRow = (rowNode.dataset.estado || '').toLowerCase();
-        const servicioRow = (rowNode.dataset.servicio || '').toLowerCase();
+        const servicioRowId = (rowNode.dataset.servicioId || '').toString();
         if (estadoFiltro && estadoRow !== estadoFiltro) return false;
-        if (servicioFiltro && servicioRow !== servicioFiltro) return false;
+        if (servicioFiltro && servicioRowId !== servicioFiltro) return false;
         return true;
       });
 
@@ -425,10 +731,23 @@ function badge_estado($estado){
 
     function filtrarMes(){
       const mes = document.getElementById('filtroMes').value || '';
+      const estado = document.getElementById('filtroEstado').value || '';
+      const servicio = document.getElementById('filtroServicio').value || '';
+      const busqueda = document.getElementById('filtroBusqueda').value || '';
       const url = new URL(window.location.href);
       if (mes) url.searchParams.set('mes', mes); else url.searchParams.delete('mes');
+      if (estado) url.searchParams.set('estado', estado); else url.searchParams.delete('estado');
+      if (servicio) url.searchParams.set('servicio', servicio); else url.searchParams.delete('servicio');
+      if (busqueda) url.searchParams.set('q', busqueda); else url.searchParams.delete('q');
       window.location.href = url.toString();
     }
+
+    document.getElementById('filtroBusqueda').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        filtrarMes();
+      }
+    });
 
     // Modal alta/edición
     function abrirModal(data = {}) {
@@ -523,6 +842,22 @@ function badge_estado($estado){
         mostrarToast(json.message || 'No se pudo eliminar', 'error');
       }
     });
+
+    const formSeg = document.getElementById('formSeguimiento');
+    if (formSeg) {
+      formSeg.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const msg = document.getElementById('seguimientoMsg');
+        msg.textContent = 'Guardando...';
+        msg.classList.remove('text-emerald-600');
+        const fd = new FormData(formSeg);
+        const res = await fetch('../controllers/seguimiento_nuevo.php', { method:'POST', body: fd });
+        const json = await res.json();
+        msg.textContent = json.message || '';
+        msg.classList.toggle('text-emerald-600', !!json.success);
+        if (json.success) formSeg.reset();
+      });
+    }
   </script>
 </body>
 </html>
