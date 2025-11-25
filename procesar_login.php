@@ -6,7 +6,7 @@ $email = strtolower(trim($_POST['email'] ?? ''));
 $password = $_POST['password'] ?? '';
 
 if ($email === '' || $password === '') {
-    header("Location: login.php?error=1");
+    header("Location: index.php?error=1");
     exit;
 }
 
@@ -41,5 +41,5 @@ if ($usuario && $passwordValido) {
     exit;
 }
 
-header("Location: login.php?error=1");
+header("Location: index.php?error=1");
 exit;

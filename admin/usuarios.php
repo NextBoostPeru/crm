@@ -3,7 +3,7 @@ require_once '../includes/auth.php';
 require_once '../includes/db.php';
 
 if (($_SESSION['rol'] ?? '') !== 'admin') {
-  header('Location: ../login.php');
+  header('Location: ../index.php');
   exit;
 }
 
