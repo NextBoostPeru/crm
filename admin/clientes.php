@@ -4,31 +4,84 @@ require_once '../includes/auth.php';
 require_once '../includes/db.php';
 
 $mes_actual = isset($_GET['mes']) && preg_match('/^\d{4}-\d{2}$/', $_GET['mes']) ? $_GET['mes'] : date('Y-m');
+$filtro_estado = isset($_GET['estado']) ? trim($_GET['estado']) : '';
+$filtro_servicio = isset($_GET['servicio']) ? trim($_GET['servicio']) : '';
+$filtro_busqueda = isset($_GET['q']) ? trim($_GET['q']) : '';
+
+$limite_listado = 150; // evita listas kilométricas
+
+// Helper para reutilizar filtros en consultas
+function condiciones_clientes(array $opts): array {
+  $where = ["DATE_FORMAT(c.creado_en, '%Y-%m') = :mes"];
+  $params = [':mes' => $opts['mes']];
+
+  if ($opts['estado'] !== '') {
+    $where[] = 'LOWER(c.estado) = LOWER(:estado)';
+    $params[':estado'] = $opts['estado'];
+  }
+
+  if ($opts['servicio'] !== '') {
+    $where[] = 'c.servicio_id = :servicio_id';
+    $params[':servicio_id'] = (int)$opts['servicio'];
+  }
+
+  if ($opts['busqueda'] !== '') {
+    $where[] = '(c.nombre LIKE :q OR c.empresa LIKE :q OR c.email LIKE :q)';
+    $params[':q'] = '%'.$opts['busqueda'].'%';
+  }
+
+  return [$where, $params];
+}
 
 // Catálogo
 $servicios = $pdo->query("SELECT id, nombre FROM servicios ORDER BY nombre")->fetchAll(PDO::FETCH_ASSOC);
 $estados   = ['en negociación', 'cerrado', 'interesado', 'nuevo'];
 
-// Listado (por mes, como ventas.php)
-$stmt = $pdo->prepare("SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.comentario, c.creado_en,
-                              c.servicio_id, s.nombre AS servicio
-                       FROM clientes c
-                       LEFT JOIN servicios s ON s.id = c.servicio_id
-                       WHERE DATE_FORMAT(c.creado_en, '%Y-%m') = ?
-                       ORDER BY c.creado_en DESC, c.id DESC");
-$stmt->execute([$mes_actual]);
+// Listado (por mes, como ventas.php) con filtros y límite
+[$where_list, $params_list] = condiciones_clientes([
+  'mes' => $mes_actual,
+  'estado' => $filtro_estado,
+  'servicio' => $filtro_servicio,
+  'busqueda' => $filtro_busqueda,
+]);
+$sql_list = "SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.comentario, c.creado_en,
+                    c.servicio_id, s.nombre AS servicio
+             FROM clientes c
+             LEFT JOIN servicios s ON s.id = c.servicio_id
+             WHERE ".implode(' AND ', $where_list)."
+             ORDER BY c.creado_en DESC, c.id DESC
+             LIMIT {$limite_listado}";
+$stmt = $pdo->prepare($sql_list);
+$stmt->execute($params_list);
 $clientes = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
+// Conteo total para avisar si se recorta la lista
+$sql_total = "SELECT COUNT(*) FROM clientes c LEFT JOIN servicios s ON s.id = c.servicio_id WHERE ".implode(' AND ', $where_list);
+$stmt_total = $pdo->prepare($sql_total);
+$stmt_total->execute($params_list);
+$total_clientes_filtrados = (int)$stmt_total->fetchColumn();
+$listado_recortado = $total_clientes_filtrados > $limite_listado;
+
 // Seguimiento general (sin limitar por mes)
-$clientes_pipeline_stmt = $pdo->query("
+[$where_pipeline, $params_pipeline] = condiciones_clientes([
+  'mes' => $mes_actual,
+  'estado' => $filtro_estado,
+  'servicio' => $filtro_servicio,
+  'busqueda' => $filtro_busqueda,
+]);
+$sql_pipeline = "
   SELECT c.id, c.nombre, c.empresa, c.email, c.telefono, c.estado, c.servicio_id,
          s.nombre AS servicio,
          (SELECT MAX(fecha) FROM seguimientos WHERE cliente_id = c.id) AS ultima_interaccion,
          (SELECT nota FROM seguimientos WHERE cliente_id = c.id ORDER BY fecha DESC, id DESC LIMIT 1) AS ultima_nota
   FROM clientes c
   LEFT JOIN servicios s ON s.id = c.servicio_id
-  ORDER BY c.nombre
-");
+  WHERE ".implode(' AND ', $where_pipeline)."
+  ORDER BY ultima_interaccion DESC IS NULL, ultima_interaccion DESC, c.nombre
+  LIMIT 120
+";
+$clientes_pipeline_stmt = $pdo->prepare($sql_pipeline);
+$clientes_pipeline_stmt->execute($params_pipeline);
 $clientes_pipeline = $clientes_pipeline_stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $seg_stmt = $pdo->query("
@@ -191,7 +244,7 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
         </div>
       </div>
 
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
         <label class="flex flex-col gap-1">
           <span class="text-sm font-semibold text-gray-700">Mes</span>
           <input type="month" id="filtroMes" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200" value="<?= h($mes_actual) ?>">
@@ -201,7 +254,7 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
           <select id="filtroEstado" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200">
             <option value="">Todos</option>
             <?php foreach ($estados as $estado): ?>
-              <option value="<?= h($estado) ?>"><?= ucfirst($estado) ?></option>
+              <option value="<?= h($estado) ?>" <?= $filtro_estado === $estado ? 'selected' : '' ?>><?= ucfirst($estado) ?></option>
             <?php endforeach; ?>
           </select>
         </label>
@@ -210,10 +263,29 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
           <select id="filtroServicio" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200">
             <option value="">Todos</option>
             <?php foreach ($servicios as $s): ?>
-              <option value="<?= h($s['nombre']) ?>"><?= h($s['nombre']) ?></option>
+              <option value="<?= (int)$s['id'] ?>" <?= (string)$filtro_servicio === (string)$s['id'] ? 'selected' : '' ?>><?= h($s['nombre']) ?></option>
             <?php endforeach; ?>
           </select>
         </label>
+        <label class="flex flex-col gap-1">
+          <span class="text-sm font-semibold text-gray-700">Buscar</span>
+          <input type="search" id="filtroBusqueda" class="border border-gray-200 p-2 rounded-lg focus:ring-2 focus:ring-blue-200" placeholder="Nombre, empresa o email" value="<?= h($filtro_busqueda) ?>">
+        </label>
+      </div>
+
+      <div class="flex items-center flex-wrap gap-2 text-xs text-gray-600">
+        <span class="px-2 py-1 bg-slate-100 rounded-full border border-slate-200">
+          <?= $total_clientes_filtrados ?> coincidencias
+          <?= $listado_recortado ? "· mostrando {$limite_listado}" : '' ?>
+        </span>
+        <?php if ($listado_recortado): ?>
+          <span class="text-amber-600 flex items-center gap-1 text-sm">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+              <path stroke-width="1.5" d="M12 9v3m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            Demasiados resultados. Ajusta los filtros o la búsqueda para acotar la lista.
+          </span>
+        <?php endif; ?>
       </div>
 
       <div class="flex flex-wrap gap-2 text-xs text-gray-500">
@@ -397,7 +469,7 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
         </thead>
         <tbody>
           <?php foreach ($clientes as $c): ?>
-            <tr class="border-b" data-estado="<?= h($c['estado']) ?>" data-servicio="<?= h($c['servicio'] ?? '') ?>">
+            <tr class="border-b" data-estado="<?= h($c['estado']) ?>" data-servicio="<?= h($c['servicio'] ?? '') ?>" data-servicio-id="<?= (int)($c['servicio_id'] ?? 0) ?>">
               <!-- N° (se llena por DataTables) -->
               <td class="p-2"></td>
 
@@ -608,16 +680,16 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
         }
       });
 
-      // Filtro por estado y servicio
+      // Filtro por estado y servicio (cliente-side sobre el resultado ya acotado en el servidor)
       $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
         if (settings.nTable.id !== 'tabla-clientes') return true;
         const estadoFiltro = (document.getElementById('filtroEstado').value || '').toLowerCase();
-        const servicioFiltro = (document.getElementById('filtroServicio').value || '').toLowerCase();
+        const servicioFiltro = (document.getElementById('filtroServicio').value || '').toString();
         const rowNode = tablaClientes.row(dataIndex).node();
         const estadoRow = (rowNode.dataset.estado || '').toLowerCase();
-        const servicioRow = (rowNode.dataset.servicio || '').toLowerCase();
+        const servicioRowId = (rowNode.dataset.servicioId || '').toString();
         if (estadoFiltro && estadoRow !== estadoFiltro) return false;
-        if (servicioFiltro && servicioRow !== servicioFiltro) return false;
+        if (servicioFiltro && servicioRowId !== servicioFiltro) return false;
         return true;
       });
 
@@ -626,10 +698,23 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
 
     function filtrarMes(){
       const mes = document.getElementById('filtroMes').value || '';
+      const estado = document.getElementById('filtroEstado').value || '';
+      const servicio = document.getElementById('filtroServicio').value || '';
+      const busqueda = document.getElementById('filtroBusqueda').value || '';
       const url = new URL(window.location.href);
       if (mes) url.searchParams.set('mes', mes); else url.searchParams.delete('mes');
+      if (estado) url.searchParams.set('estado', estado); else url.searchParams.delete('estado');
+      if (servicio) url.searchParams.set('servicio', servicio); else url.searchParams.delete('servicio');
+      if (busqueda) url.searchParams.set('q', busqueda); else url.searchParams.delete('q');
       window.location.href = url.toString();
     }
+
+    document.getElementById('filtroBusqueda').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        filtrarMes();
+      }
+    });
 
     // Modal alta/edición
     function abrirModal(data = {}) {
