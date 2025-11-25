@@ -4,6 +4,12 @@ if (isset($_SESSION['usuario'])) {
   header('Location: ' . ($_SESSION['rol'] === 'admin' ? 'admin/dashboard.php' : 'colaborador/dashboard.php'));
   exit;
 }
+
+$scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+$host = $_SERVER['HTTP_HOST'] ?? '';
+$basePath = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
+$basePath = ($basePath === '/' || $basePath === '.') ? '' : $basePath;
+$loginAction = htmlspecialchars($scheme . '://' . $host . $basePath . '/procesar_login.php', ENT_QUOTES, 'UTF-8');
 ?>
 <!DOCTYPE html>
 <html lang="es">
@@ -34,7 +40,7 @@ if (isset($_SESSION['usuario'])) {
         </div>
       </div>
 
-      <form action="procesar_login.php" method="POST" class="bg-white p-8 space-y-6">
+      <form action="<?php echo $loginAction; ?>" method="POST" class="bg-white p-8 space-y-6" novalidate>
         <div class="space-y-2">
           <p class="text-sm font-semibold text-indigo-600">Bienvenido(a)</p>
           <h2 class="text-2xl font-bold text-slate-900">Iniciar sesión</h2>

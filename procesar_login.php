@@ -2,8 +2,12 @@
 session_start();
 require_once 'includes/db.php';
 
-$email = strtolower(trim($_POST['email'] ?? ''));
-$password = trim($_POST['password'] ?? '');
+$isPost = ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
+$emailInput = filter_input(INPUT_POST, 'email', FILTER_SANITIZE_EMAIL);
+$passwordInput = filter_input(INPUT_POST, 'password');
+
+$email = strtolower(trim($emailInput ?? ''));
+$password = trim($passwordInput ?? '');
 
 // Construir base path para redirecciones seguras en subcarpetas
 $basePath = rtrim(dirname($_SERVER['SCRIPT_NAME']), '/\\');
@@ -14,6 +18,10 @@ $redirect = function (string $path, array $params = []) use ($basePath) {
     header('Location: ' . $basePath . '/' . ltrim($path, '/') . $query, true, 303);
     exit;
 };
+
+if (!$isPost) {
+    $redirect('index.php', ['error' => 'credenciales']);
+}
 
 if ($email === '' || $password === '') {
     $redirect('index.php', ['error' => 'incompleto']);
