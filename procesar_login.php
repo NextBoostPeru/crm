@@ -2,14 +2,28 @@
 session_start();
 require_once 'includes/db.php';
 
-$email = $_POST['email'] ?? '';
+$email = trim($_POST['email'] ?? '');
 $password = $_POST['password'] ?? '';
 
-$stmt = $pdo->prepare("SELECT * FROM usuarios WHERE email = ?");
+$stmt = $pdo->prepare("SELECT * FROM usuarios WHERE email = ? LIMIT 1");
 $stmt->execute([$email]);
 $usuario = $stmt->fetch(PDO::FETCH_ASSOC);
 
-if ($usuario && password_verify($password, $usuario['password'])) {
+$passwordValido = false;
+
+if ($usuario) {
+    // Soporta contraseñas en texto plano y con password_hash para compatibilidad
+    if (!empty($usuario['password'])) {
+        if (password_verify($password, $usuario['password'])) {
+            $passwordValido = true;
+        } elseif (hash_equals((string) $usuario['password'], $password)) {
+            $passwordValido = true;
+        }
+    }
+}
+
+if ($usuario && $passwordValido) {
+    session_regenerate_id(true);
     $_SESSION['usuario'] = $usuario['nombre'];
     $_SESSION['rol'] = $usuario['rol'];
     $_SESSION['usuario_id'] = $usuario['id'];
@@ -20,6 +34,7 @@ if ($usuario && password_verify($password, $usuario['password'])) {
         header("Location: colaborador/dashboard.php");
     }
     exit;
-} else {
-    header("Location: login.php?error=1");
 }
+
+header("Location: login.php?error=1");
+exit;
