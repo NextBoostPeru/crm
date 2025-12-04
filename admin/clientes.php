@@ -1,7 +1,7 @@
 <?php
 // admin/clientes.php
-require_once '../includes/auth.php';
-require_once '../includes/db.php';
+require_once __DIR__.'/../includes/auth.php';
+require_once __DIR__.'/../includes/db.php';
 
 $mes_actual = isset($_GET['mes']) && preg_match('/^\d{4}-\d{2}$/', $_GET['mes']) ? $_GET['mes'] : date('Y-m');
 $filtro_estado = isset($_GET['estado']) ? trim($_GET['estado']) : '';

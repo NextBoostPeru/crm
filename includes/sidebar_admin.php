@@ -1,6 +1,6 @@
 <?php
-require_once '../includes/auth.php';
-require_once '../includes/db.php';
+require_once __DIR__.'/auth.php';
+require_once __DIR__.'/db.php';
 
 $rol = $_SESSION['rol'] ?? 'colaborador';
 $current = basename($_SERVER['SCRIPT_NAME']);
