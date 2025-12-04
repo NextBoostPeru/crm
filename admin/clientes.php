@@ -412,49 +412,98 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
     </div>
 
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4 mt-4">
-      <div class="bg-white rounded-2xl card-shadow border border-gray-100 p-5 lg:col-span-2">
-        <div class="flex items-center justify-between mb-3">
-          <h3 class="text-lg font-semibold flex items-center gap-2 text-slate-900">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="1.5" d="M5 13a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v4H5Z"/><path stroke-width="1.5" d="M9 9V7a3 3 0 1 1 6 0v2"/></svg>
-            Registrar seguimiento
-          </h3>
-          <span class="text-xs text-gray-500">Última interacción + próximo paso</span>
+      <div class="bg-white rounded-2xl card-shadow border border-gray-100 p-5 lg:col-span-2 space-y-4">
+        <div class="flex items-center justify-between">
+          <div>
+            <p class="text-xs uppercase text-gray-500 font-semibold">Gestión rápida</p>
+            <h3 class="text-lg font-semibold flex items-center gap-2 text-slate-900">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="1.5" d="M5 13a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v4H5Z"/><path stroke-width="1.5" d="M9 9V7a3 3 0 1 1 6 0v2"/></svg>
+              Seguimientos sin fricción
+            </h3>
+          </div>
+          <span class="text-xs text-gray-500">1 selección + 1 clic</span>
         </div>
-        <form id="formSeguimiento" class="grid grid-cols-1 md:grid-cols-2 gap-3">
-          <div class="md:col-span-2">
-            <label class="text-sm font-medium text-gray-700">Cliente</label>
-            <select name="cliente_id" class="mt-1 w-full border rounded-lg p-2" required>
-              <option value="">Selecciona un contacto</option>
-              <?php foreach ($clientes_pipeline as $c): ?>
-                <option value="<?= (int)$c['id'] ?>"><?= h($c['nombre']) ?> — <?= h(etapa_label($c['estado'])) ?></option>
-              <?php endforeach; ?>
-            </select>
+
+        <div class="bg-slate-50 border border-slate-100 rounded-xl p-3 flex flex-col gap-3">
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <label class="md:col-span-2 text-sm font-medium text-gray-700">Cliente
+              <select id="rapidoCliente" class="mt-1 w-full border rounded-lg p-2">
+                <option value="">Selecciona contacto</option>
+                <?php foreach ($clientes_pipeline as $c): ?>
+                  <option value="<?= (int)$c['id'] ?>" data-etapa="<?= h(etapa_label($c['estado'])) ?>"><?= h($c['nombre']) ?> — <?= h(etapa_label($c['estado'])) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </label>
+            <label class="text-sm font-medium text-gray-700">Añadir nota breve
+              <input id="rapidoNota" type="text" class="mt-1 w-full border rounded-lg p-2" placeholder="Opcional" />
+            </label>
           </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700">Fecha de contacto</label>
-            <input type="date" name="fecha" class="mt-1 w-full border rounded-lg p-2" value="<?= date('Y-m-d') ?>" required>
+          <div class="flex flex-wrap gap-2">
+            <?php
+              $atajos = [
+                ['cta' => 'Respondió', 'nota' => 'Respondió la llamada. Agendar siguiente paso.', 'proximo' => '+2 days'],
+                ['cta' => 'No contesta', 'nota' => 'No contestó. Intentar de nuevo.', 'proximo' => '+1 day'],
+                ['cta' => 'Envía info', 'nota' => 'Se envió info / demo. Esperar confirmación.', 'proximo' => '+3 days'],
+                ['cta' => 'Interesado', 'nota' => 'Interés confirmado. Preparar propuesta.', 'proximo' => '+2 days'],
+                ['cta' => 'Cerrado', 'nota' => 'Venta cerrada. Pasar a onboarding.', 'proximo' => '+7 days'],
+              ];
+            ?>
+            <?php foreach ($atajos as $at): ?>
+              <button
+                type="button"
+                class="px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm hover:border-blue-300 hover:text-blue-700 transition"
+                onclick="gestionarRapido('<?= h($at['cta']) ?>','<?= h($at['nota']) ?>','<?= h($at['proximo']) ?>')">
+                <?= h($at['cta']) ?>
+              </button>
+            <?php endforeach; ?>
           </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700">Tipo</label>
-            <select name="tipo" class="mt-1 w-full border rounded-lg p-2" required>
-              <option value="llamada">Llamada</option>
-              <option value="mensaje">Mensaje</option>
-              <option value="reunión">Reunión</option>
-            </select>
+          <p id="rapidoMsg" class="text-sm text-gray-500"></p>
+        </div>
+
+        <div class="border-t pt-4">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-lg font-semibold flex items-center gap-2 text-slate-900">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-width="1.5" d="M5 13a4 4 0 0 1 4-4h6a4 4 0 0 1 4 4v4H5Z"/><path stroke-width="1.5" d="M9 9V7a3 3 0 1 1 6 0v2"/></svg>
+              Registrar seguimiento detallado
+            </h3>
+            <span class="text-xs text-gray-500">Última interacción + próximo paso</span>
           </div>
-          <div class="md:col-span-2">
-            <label class="text-sm font-medium text-gray-700">Detalle</label>
-            <textarea name="nota" class="mt-1 w-full border rounded-lg p-2" rows="2" placeholder="Objetivo, acuerdos, próximas acciones" required></textarea>
-          </div>
-          <div>
-            <label class="text-sm font-medium text-gray-700">Próximo seguimiento</label>
-            <input type="date" name="proximo" class="mt-1 w-full border rounded-lg p-2" value="<?= date('Y-m-d', strtotime('+5 days')) ?>">
-          </div>
-          <div class="md:col-span-2 flex items-center gap-3">
-            <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg">Guardar seguimiento</button>
-            <p id="seguimientoMsg" class="text-sm text-gray-500"></p>
-          </div>
-        </form>
+          <form id="formSeguimiento" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div class="md:col-span-2">
+              <label class="text-sm font-medium text-gray-700">Cliente</label>
+              <select name="cliente_id" class="mt-1 w-full border rounded-lg p-2" required>
+                <option value="">Selecciona un contacto</option>
+                <?php foreach ($clientes_pipeline as $c): ?>
+                  <option value="<?= (int)$c['id'] ?>"><?= h($c['nombre']) ?> — <?= h(etapa_label($c['estado'])) ?></option>
+                <?php endforeach; ?>
+              </select>
+            </div>
+            <div>
+              <label class="text-sm font-medium text-gray-700">Fecha de contacto</label>
+              <input type="date" name="fecha" class="mt-1 w-full border rounded-lg p-2" value="<?= date('Y-m-d') ?>" required>
+            </div>
+            <div>
+              <label class="text-sm font-medium text-gray-700">Tipo</label>
+              <select name="tipo" class="mt-1 w-full border rounded-lg p-2" required>
+                <option value="llamada">Llamada</option>
+                <option value="mensaje">Mensaje</option>
+                <option value="reunión">Reunión</option>
+              </select>
+            </div>
+            <div class="md:col-span-2">
+              <label class="text-sm font-medium text-gray-700">Detalle</label>
+              <textarea name="nota" class="mt-1 w-full border rounded-lg p-2" rows="2" placeholder="Objetivo, acuerdos, próximas acciones" required></textarea>
+            </div>
+            <div>
+              <label class="text-sm font-medium text-gray-700">Próximo seguimiento</label>
+              <input type="date" name="proximo" class="mt-1 w-full border rounded-lg p-2" value="<?= date('Y-m-d', strtotime('+5 days')) ?>">
+            </div>
+            <div class="md:col-span-2 flex items-center gap-3">
+              <button type="submit" class="bg-blue-600 text-white px-4 py-2 rounded-lg">Guardar seguimiento</button>
+              <p id="seguimientoMsg" class="text-sm text-gray-500"></p>
+            </div>
+          </form>
+        </div>
       </div>
 
       <div class="bg-white rounded-2xl card-shadow border border-gray-100 p-5 space-y-3">
@@ -748,6 +797,53 @@ usort($recordatorios, fn($a,$b) => strcmp($a['proximo'], $b['proximo']));
         filtrarMes();
       }
     });
+
+    // Gestión rápida: mínima fricción
+    const msgRapido = document.getElementById('rapidoMsg');
+    function formatoFecha(date) {
+      return date.toISOString().slice(0, 10);
+    }
+    function sumarDias(base, offset) {
+      const d = new Date(base);
+      d.setDate(d.getDate() + offset);
+      return d;
+    }
+    async function gestionarRapido(etiqueta, notaBase, proximoOffset) {
+      const clienteId = document.getElementById('rapidoCliente').value;
+      const notaExtra = document.getElementById('rapidoNota').value.trim();
+      msgRapido.textContent = '';
+      if (!clienteId) {
+        msgRapido.textContent = 'Selecciona un cliente para registrar la gestión.';
+        return;
+      }
+
+      const hoy = new Date();
+      const fecha = formatoFecha(hoy);
+      const offsetNumber = parseInt((proximoOffset || '+2 days').replace(/[^\d-]/g, ''), 10) || 2;
+      const proximo = formatoFecha(sumarDias(hoy, offsetNumber));
+      const nota = notaExtra ? `${notaBase} ${notaExtra}` : notaBase;
+
+      msgRapido.textContent = 'Guardando...';
+      const fd = new FormData();
+      fd.append('cliente_id', clienteId);
+      fd.append('fecha', fecha);
+      fd.append('tipo', etiqueta.toLowerCase());
+      fd.append('nota', nota);
+      fd.append('proximo', proximo);
+
+      try {
+        const res = await fetch('../controllers/seguimiento_nuevo.php', { method:'POST', body: fd });
+        const json = await res.json();
+        msgRapido.textContent = json.message || 'Listo';
+        msgRapido.classList.toggle('text-emerald-600', !!json.success);
+        if (json.success) {
+          document.getElementById('rapidoNota').value = '';
+        }
+      } catch (err) {
+        msgRapido.textContent = 'No se pudo guardar la gestión rápida.';
+        msgRapido.classList.remove('text-emerald-600');
+      }
+    }
 
     // Modal alta/edición
     function abrirModal(data = {}) {
