@@ -25,20 +25,18 @@ function nav_item($href, $label, $icon)
     pointer-events: auto;
   }
 
-  @media (max-width: 1024px) {
-    .sidebar {
-      transform: translateX(-100%);
-    }
+  .sidebar {
+    transform: translateX(-100%);
+  }
 
-    .sidebar.open {
-      transform: translateX(0);
-    }
+  .sidebar.open {
+    transform: translateX(0);
   }
 </style>
 
-<!-- Botón hamburguesa solo visible en pantallas pequeñas -->
+<!-- Botón principal para abrir/cerrar -->
 <button id="btnToggleSidebar" aria-label="Abrir menú" aria-controls="sidebar" aria-expanded="false"
-  class="lg:hidden fixed top-4 left-4 z-50 bg-white/90 backdrop-blur border border-gray-200 shadow-lg p-3 rounded-full text-gray-700 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
+  class="fixed top-4 left-4 z-50 bg-white/90 backdrop-blur border border-gray-200 shadow-lg p-3 rounded-full text-gray-700 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-blue-500">
   <i class="fas fa-bars"></i>
 </button>
 
@@ -84,12 +82,23 @@ function nav_item($href, $label, $icon)
   const sidebar = document.getElementById('sidebar');
   const backdrop = document.getElementById('sidebarBackdrop');
 
+  const isMobile = () => window.innerWidth < 1024;
+
   const setSidebarState = (open) => {
     const action = open ? 'add' : 'remove';
+    const mobile = isMobile();
     sidebar.classList[action]('open');
-    backdrop.classList[action]('visible');
-    document.body.classList[open ? 'add' : 'remove']('overflow-hidden');
+
+    if (mobile) {
+      backdrop.classList[action]('visible');
+      document.body.classList[open ? 'add' : 'remove']('overflow-hidden');
+    } else {
+      backdrop.classList.remove('visible');
+      document.body.classList.remove('overflow-hidden');
+    }
+
     btnToggle.setAttribute('aria-expanded', open ? 'true' : 'false');
+    btnToggle.setAttribute('aria-label', open ? 'Cerrar menú' : 'Abrir menú');
   };
 
   const toggleSidebar = () => setSidebarState(!sidebar.classList.contains('open'));
@@ -112,16 +121,9 @@ function nav_item($href, $label, $icon)
   });
 
   window.addEventListener('resize', () => {
-    if (window.innerWidth >= 1024) {
-      setSidebarState(true);
-      document.body.classList.remove('overflow-hidden');
-    } else {
-      setSidebarState(false);
-    }
+    setSidebarState(window.innerWidth >= 1024);
   });
-  
+
   // Garantizar estado inicial acorde a breakpoint
-  if (window.innerWidth < 1024) {
-    setSidebarState(false);
-  }
+  setSidebarState(window.innerWidth >= 1024);
 </script>
