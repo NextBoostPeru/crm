@@ -93,7 +93,7 @@ try {
     FROM clientes c
     LEFT JOIN servicios s ON s.id = c.servicio_id
     WHERE ".implode(' AND ', $where_pipeline)."
-    ORDER BY ultima_interaccion DESC IS NULL, ultima_interaccion DESC, c.nombre
+    ORDER BY (ultima_interaccion IS NULL), ultima_interaccion DESC, c.nombre
     LIMIT 120
   ";
   $clientes_pipeline_stmt = $pdo->prepare($sql_pipeline);
